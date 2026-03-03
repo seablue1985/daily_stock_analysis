@@ -186,7 +186,7 @@ export const LLMChannelEditor: React.FC<LLMChannelEditorProps> = ({
   const addChannel = useCallback(() => {
     const preset = CHANNEL_PRESETS[addPreset] || CHANNEL_PRESETS.custom;
     // Determine a unique name
-    let baseName = addPreset === 'custom' ? 'custom' : addPreset;
+    const baseName = addPreset === 'custom' ? 'custom' : addPreset;
     const existingNames = new Set(channels.map((c) => c.name));
     let name = baseName;
     let counter = 2;
