@@ -48,9 +48,9 @@ class LLMResponse:
 _AUTO_THINKING_MODELS: List[str] = ["deepseek-reasoner", "deepseek-r1", "qwq"]
 
 # Models that need explicit opt-in via extra_body; payload decoupled from model name.
-_OPT_IN_THINKING_MODELS: Dict[str, dict] = {
-    "deepseek-chat": {"thinking": {"type": "enabled"}},
-}
+# DeepSeek 官方接口下，deepseek-chat 开启 thinking 会转为推理输出（content 为空），
+# 会影响本项目基于 content 的解析链路，因此默认关闭该显式开关。
+_OPT_IN_THINKING_MODELS: Dict[str, dict] = {}
 
 
 def _model_matches(model: str, entries: List[str]) -> bool:
