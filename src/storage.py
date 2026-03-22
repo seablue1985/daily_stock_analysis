@@ -1324,6 +1324,21 @@ class DatabaseManager:
             return 0
         
         saved_count = 0
+
+        def apply_row_values(record: StockDaily, row: pd.Series, *, source: str) -> None:
+            record.open = row.get('open')
+            record.high = row.get('high')
+            record.low = row.get('low')
+            record.close = row.get('close')
+            record.volume = row.get('volume')
+            record.amount = row.get('amount')
+            record.pct_chg = row.get('pct_chg')
+            record.ma5 = row.get('ma5')
+            record.ma10 = row.get('ma10')
+            record.ma20 = row.get('ma20')
+            record.volume_ratio = row.get('volume_ratio')
+            record.data_source = source
+            record.updated_at = datetime.now()
         
         with self.get_session() as session:
             try:
@@ -1349,39 +1364,34 @@ class DatabaseManager:
                     
                     if existing:
                         # 更新现有记录
-                        existing.open = row.get('open')
-                        existing.high = row.get('high')
-                        existing.low = row.get('low')
-                        existing.close = row.get('close')
-                        existing.volume = row.get('volume')
-                        existing.amount = row.get('amount')
-                        existing.pct_chg = row.get('pct_chg')
-                        existing.ma5 = row.get('ma5')
-                        existing.ma10 = row.get('ma10')
-                        existing.ma20 = row.get('ma20')
-                        existing.volume_ratio = row.get('volume_ratio')
-                        existing.data_source = data_source
-                        existing.updated_at = datetime.now()
+                        apply_row_values(existing, row, source=data_source)
                     else:
                         # 创建新记录
-                        record = StockDaily(
-                            code=code,
-                            date=row_date,
-                            open=row.get('open'),
-                            high=row.get('high'),
-                            low=row.get('low'),
-                            close=row.get('close'),
-                            volume=row.get('volume'),
-                            amount=row.get('amount'),
-                            pct_chg=row.get('pct_chg'),
-                            ma5=row.get('ma5'),
-                            ma10=row.get('ma10'),
-                            ma20=row.get('ma20'),
-                            volume_ratio=row.get('volume_ratio'),
-                            data_source=data_source,
-                        )
-                        session.add(record)
-                        saved_count += 1
+                        try:
+                            with session.begin_nested():
+                                record = StockDaily(
+                                    code=code,
+                                    date=row_date,
+                                    data_source=data_source,
+                                )
+                                apply_row_values(record, row, source=data_source)
+                                session.add(record)
+                                session.flush()
+                            saved_count += 1
+                        except IntegrityError:
+                            # 并发/重复插入时回读已有记录并更新，避免整批失败。
+                            existing = session.execute(
+                                select(StockDaily).where(
+                                    and_(
+                                        StockDaily.code == code,
+                                        StockDaily.date == row_date
+                                    )
+                                )
+                            ).scalar_one_or_none()
+                            if existing is None:
+                                raise
+                            apply_row_values(existing, row, source=data_source)
+                            logger.debug("stock_daily 重复写入已转为更新: %s %s", code, row_date)
                 
                 session.commit()
                 logger.info(f"保存 {code} 数据成功，新增 {saved_count} 条")

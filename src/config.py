@@ -672,6 +672,9 @@ class Config:
     # - efinance/akshare_em: 东财全量接口，数据最全但容易被封
     # - tushare: Tushare Pro，需要2000积分，数据全面（付费用户可优先使用）
     realtime_source_priority: str = "tencent,akshare_sina,efinance,akshare_em"
+    # 日线/历史/研究链路数据源优先级（逗号分隔）
+    # 推荐本地优先：ths > pytdx > tushare > efinance > akshare
+    market_data_fetcher_priority: str = "pytdx,tushare,efinance,akshare,baostock,yfinance"
     # 实时行情缓存时间（秒）
     realtime_cache_ttl: int = 600
     # 熔断器冷却时间（秒）
@@ -1748,6 +1751,42 @@ class Config:
             return resolved
 
         return default_priority
+
+    @classmethod
+    def _resolve_market_data_fetcher_priority(cls) -> str:
+        """
+        Resolve market data fetcher priority with local-source preference.
+
+        Priority goal:
+        1. User-local sources first (THS / Pytdx)
+        2. Structured paid source next (Tushare)
+        3. Public network sources as fallback
+        """
+        explicit = os.getenv('MARKET_DATA_FETCHER_PRIORITY')
+        if explicit:
+            return explicit
+
+        has_ths = any(
+            os.getenv(key, '').strip()
+            for key in ('THS_MARKET_PYTHON', 'THS_USERNAME', 'THS_MARKET_USERNAME')
+        )
+        has_tushare = bool(os.getenv('TUSHARE_TOKEN', '').strip())
+
+        resolved: list[str] = []
+        if has_ths:
+            resolved.append('ths')
+        resolved.append('pytdx')
+        if has_tushare:
+            resolved.append('tushare')
+        resolved.extend(['efinance', 'akshare', 'baostock', 'yfinance'])
+        if not has_tushare:
+            resolved.append('tushare')
+
+        deduped: list[str] = []
+        for item in resolved:
+            if item not in deduped:
+                deduped.append(item)
+        return ','.join(deduped)
 
     @classmethod
     def reset_instance(cls) -> None:
