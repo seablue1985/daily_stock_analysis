@@ -1,9 +1,12 @@
 import type React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { resolveWebBuildInfo } from '../../utils/constants';
 import SettingsPage from '../SettingsPage';
 
 const {
+  exportDesktopEnv,
+  importDesktopEnv,
   load,
   clearToast,
   setActiveCategory,
@@ -15,7 +18,10 @@ const {
   refreshStatus,
   useAuthMock,
   useSystemConfigMock,
+  webBuildInfoMock,
 } = vi.hoisted(() => ({
+  exportDesktopEnv: vi.fn(),
+  importDesktopEnv: vi.fn(),
   load: vi.fn(),
   clearToast: vi.fn(),
   setActiveCategory: vi.fn(),
@@ -27,12 +33,36 @@ const {
   refreshStatus: vi.fn(),
   useAuthMock: vi.fn(),
   useSystemConfigMock: vi.fn(),
+  webBuildInfoMock: {
+    version: '3.11.0',
+    rawVersion: '3.11.0',
+    buildId: 'build-20260329-021530Z',
+    buildTime: '2026-03-29T02:15:30.000Z',
+    isFallbackVersion: false,
+  },
 }));
+
+const mockedAnchorClick = vi.fn();
 
 vi.mock('../../hooks', () => ({
   useAuth: () => useAuthMock(),
   useSystemConfig: () => useSystemConfigMock(),
 }));
+
+vi.mock('../../api/systemConfig', () => ({
+  systemConfigApi: {
+    exportDesktopEnv: (...args: unknown[]) => exportDesktopEnv(...args),
+    importDesktopEnv: (...args: unknown[]) => importDesktopEnv(...args),
+  },
+}));
+
+vi.mock('../../utils/constants', async () => {
+  const actual = await vi.importActual<typeof import('../../utils/constants')>('../../utils/constants');
+  return {
+    ...actual,
+    WEB_BUILD_INFO: webBuildInfoMock,
+  };
+});
 
 vi.mock('../../components/settings', () => ({
   AuthSettingsCard: () => <div>认证与登录保护</div>,
@@ -247,13 +277,40 @@ function buildSystemConfigState(overrides: ConfigOverride = {}) {
 
 describe('SettingsPage', () => {
   beforeEach(() => {
+    vi.restoreAllMocks();
     vi.clearAllMocks();
+    Object.assign(webBuildInfoMock, {
+      version: '3.11.0',
+      rawVersion: '3.11.0',
+      buildId: 'build-20260329-021530Z',
+      buildTime: '2026-03-29T02:15:30.000Z',
+      isFallbackVersion: false,
+    });
+    load.mockResolvedValue(true);
+    exportDesktopEnv.mockResolvedValue({
+      content: 'STOCK_LIST=600519\n',
+      configVersion: 'v1',
+      updatedAt: '2026-03-21T00:00:00Z',
+    });
+    importDesktopEnv.mockResolvedValue({
+      success: true,
+      configVersion: 'v2',
+      appliedCount: 1,
+      skippedMaskedCount: 0,
+      reloadTriggered: true,
+      updatedKeys: ['STOCK_LIST'],
+      warnings: [],
+    });
     useAuthMock.mockReturnValue({
       authEnabled: true,
       passwordChangeable: true,
       refreshStatus,
     });
     useSystemConfigMock.mockReturnValue(buildSystemConfigState());
+    delete (window as { dsaDesktop?: unknown }).dsaDesktop;
+    vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:mock');
+    vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => undefined);
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(mockedAnchorClick);
   });
 
   it('renders category navigation and auth settings modules', async () => {
@@ -263,6 +320,44 @@ describe('SettingsPage', () => {
     expect(screen.getByText('认证与登录保护')).toBeInTheDocument();
     expect(screen.getByText('修改密码')).toBeInTheDocument();
     expect(load).toHaveBeenCalled();
+  });
+
+  it('renders web build info in system settings', async () => {
+    render(<SettingsPage />);
+
+    expect(await screen.findByRole('heading', { name: '版本信息' })).toBeInTheDocument();
+    expect(screen.getByText('3.11.0')).toBeInTheDocument();
+    expect(screen.getByText('build-20260329-021530Z')).toBeInTheDocument();
+    expect(screen.getByText('2026-03-29T02:15:30.000Z')).toBeInTheDocument();
+  });
+
+  it('falls back to build identifier when package version is still placeholder', () => {
+    expect(resolveWebBuildInfo({
+      packageVersion: '0.0.0',
+      buildTimestamp: '2026-03-29T02:15:30.000Z',
+    })).toEqual({
+      version: 'build-20260329-021530Z',
+      rawVersion: '0.0.0',
+      buildId: 'build-20260329-021530Z',
+      buildTime: '2026-03-29T02:15:30.000Z',
+      isFallbackVersion: true,
+    });
+  });
+
+  it('renders fallback version hint when package version is placeholder', async () => {
+    Object.assign(webBuildInfoMock, {
+      version: 'build-20260329-021530Z',
+      rawVersion: '0.0.0',
+      buildId: 'build-20260329-021530Z',
+      buildTime: '2026-03-29T02:15:30.000Z',
+      isFallbackVersion: true,
+    });
+
+    render(<SettingsPage />);
+
+    expect(await screen.findByRole('heading', { name: '版本信息' })).toBeInTheDocument();
+    expect(screen.getByText(/当前 package\.json 仍为占位版本 0\.0\.0/)).toBeInTheDocument();
+    expect(screen.getAllByText('build-20260329-021530Z')).toHaveLength(2);
   });
 
   it('resets local drafts from the page header button', () => {
@@ -280,7 +375,7 @@ describe('SettingsPage', () => {
     expect(load).not.toHaveBeenCalled();
   });
 
-  it('hides unavailable deep research and event monitor fields from the agent category', () => {
+  it('shows deep research and event monitor fields in the agent category when available', () => {
     useSystemConfigMock.mockReturnValue(buildSystemConfigState({
       activeCategory: 'agent',
       itemsByCategory: {
@@ -316,7 +411,7 @@ describe('SettingsPage', () => {
               uiControl: 'number',
               isSensitive: false,
               isRequired: false,
-              isEditable: false,
+              isEditable: true,
               options: [],
               validation: {},
               displayOrder: 2,
@@ -334,7 +429,7 @@ describe('SettingsPage', () => {
               uiControl: 'switch',
               isSensitive: false,
               isRequired: false,
-              isEditable: false,
+              isEditable: true,
               options: [],
               validation: {},
               displayOrder: 3,
@@ -347,8 +442,8 @@ describe('SettingsPage', () => {
     render(<SettingsPage />);
 
     expect(screen.getByText('AGENT_ORCHESTRATOR_TIMEOUT_S')).toBeInTheDocument();
-    expect(screen.queryByText('AGENT_DEEP_RESEARCH_BUDGET')).not.toBeInTheDocument();
-    expect(screen.queryByText('AGENT_EVENT_MONITOR_ENABLED')).not.toBeInTheDocument();
+    expect(screen.getByText('AGENT_DEEP_RESEARCH_BUDGET')).toBeInTheDocument();
+    expect(screen.getByText('AGENT_EVENT_MONITOR_ENABLED')).toBeInTheDocument();
   });
 
   it('reset button semantic: discards local changes without network request', () => {
@@ -395,5 +490,85 @@ describe('SettingsPage', () => {
 
     expect(refreshAfterExternalSave).toHaveBeenCalledWith(['LLM_CHANNELS']);
     expect(load).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not render desktop env backup card outside desktop runtime', () => {
+    render(<SettingsPage />);
+
+    expect(screen.queryByRole('heading', { name: '配置备份' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '导出 .env' })).not.toBeInTheDocument();
+  });
+
+  it('renders desktop env backup actions in desktop runtime and exports saved env', async () => {
+    (window as { dsaDesktop?: unknown }).dsaDesktop = { version: '0.1.0' };
+
+    render(<SettingsPage />);
+
+    vi.clearAllMocks();
+
+    fireEvent.click(screen.getByRole('button', { name: '导出 .env' }));
+
+    await waitFor(() => expect(exportDesktopEnv).toHaveBeenCalledTimes(1));
+    expect(mockedAnchorClick).toHaveBeenCalledTimes(1);
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it('asks for confirmation before importing when local drafts exist', async () => {
+    (window as { dsaDesktop?: unknown }).dsaDesktop = { version: '0.1.0' };
+    useSystemConfigMock.mockReturnValue(buildSystemConfigState({ hasDirty: true, dirtyCount: 2 }));
+
+    render(<SettingsPage />);
+
+    vi.clearAllMocks();
+
+    fireEvent.click(screen.getByRole('button', { name: '导入 .env' }));
+
+    expect(await screen.findByText('导入会覆盖当前草稿')).toBeInTheDocument();
+    expect(importDesktopEnv).not.toHaveBeenCalled();
+  });
+
+  it('reloads config after successful desktop env import', async () => {
+    (window as { dsaDesktop?: unknown }).dsaDesktop = { version: '0.1.0' };
+
+    const { container } = render(<SettingsPage />);
+
+    vi.clearAllMocks();
+
+    const input = container.querySelector('input[type="file"]');
+    expect(input).not.toBeNull();
+
+    fireEvent.change(input as HTMLInputElement, {
+      target: {
+        files: [new File(['STOCK_LIST=300750\n'], 'desktop-backup.env', { type: 'text/plain' })],
+      },
+    });
+
+    await waitFor(() => expect(importDesktopEnv).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+  });
+
+  it('shows an error when desktop env import succeeds but reload fails', async () => {
+    (window as { dsaDesktop?: unknown }).dsaDesktop = { version: '0.1.0' };
+    load.mockResolvedValue(false);
+
+    const { container } = render(<SettingsPage />);
+
+    vi.clearAllMocks();
+    load.mockResolvedValue(false);
+
+    const input = container.querySelector('input[type="file"]');
+    expect(input).not.toBeNull();
+
+    fireEvent.change(input as HTMLInputElement, {
+      target: {
+        files: [new File(['STOCK_LIST=300750\n'], 'desktop-backup.env', { type: 'text/plain' })],
+      },
+    });
+
+    await waitFor(() => expect(importDesktopEnv).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+    expect(screen.getByText('配置已导入但刷新失败')).toBeInTheDocument();
+    expect(screen.getByText('备份已导入，但重新加载配置失败，请手动重载页面。')).toBeInTheDocument();
+    expect(screen.queryByText('已导入 .env 备份并重新加载配置。')).not.toBeInTheDocument();
   });
 });

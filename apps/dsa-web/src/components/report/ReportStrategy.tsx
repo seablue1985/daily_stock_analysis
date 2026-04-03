@@ -1,6 +1,7 @@
 import type React from 'react';
 import type { ReportLanguage, ReportStrategy as ReportStrategyType } from '../../types/analysis';
 import { Card } from '../common';
+import { DashboardPanelHeader } from '../dashboard';
 import { getReportText, normalizeReportLanguage } from '../../utils/reportLanguage';
 
 interface ReportStrategyProps {
@@ -19,13 +20,10 @@ const StrategyItem: React.FC<StrategyItemProps> = ({
   value,
   tone,
 }) => (
-  <div className="home-subpanel p-3">
+  <div className="home-subpanel home-strategy-card p-3" style={{ ['--home-strategy-tone' as string]: `var(${tone})` }}>
     <div className="flex flex-col">
-      <span className="text-xs text-muted-text mb-0.5">{label}</span>
-      <span
-        className="text-lg font-bold font-mono"
-        style={{ color: value ? `var(${tone})` : 'var(--text-muted-text)' }}
-      >
+      <span className="home-strategy-label mb-0.5 text-xs">{label}</span>
+      <span className="home-strategy-value text-lg font-bold font-mono" style={!value ? { color: 'var(--text-muted-text)' } : undefined}>
         {value || '—'}
       </span>
     </div>
@@ -72,10 +70,11 @@ export const ReportStrategy: React.FC<ReportStrategyProps> = ({ strategy, langua
 
   return (
     <Card variant="bordered" padding="md" className="home-panel-card">
-      <div className="mb-3 flex items-baseline gap-2">
-        <span className="label-uppercase">{text.strategyPoints}</span>
-        <h3 className="text-base font-semibold text-foreground">{text.sniperLevels}</h3>
-      </div>
+      <DashboardPanelHeader
+        eyebrow={text.strategyPoints}
+        title={text.sniperLevels}
+        className="mb-3"
+      />
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         {strategyItems.map((item) => (
           <StrategyItem key={item.label} {...item} />

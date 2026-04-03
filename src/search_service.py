@@ -191,7 +191,6 @@ class BaseSearchProvider(ABC):
                 key = next(self._key_cycle)
                 if self._key_disabled_until.get(key, 0.0) > now_ts:
                     continue
-                # 跳过错误次数过多的 key（超过 3 次）
                 if self._key_errors.get(key, 0) < 3:
                     return key
 
@@ -203,7 +202,6 @@ class BaseSearchProvider(ABC):
                 logger.warning(f"[{self._name}] 所有 API Key 当前都处于冷却期，跳过本轮搜索")
                 return None
 
-            # 仅当剩余 key 都是软错误累计时才重置；处于冷却期的 key 不会被重置回流。
             logger.warning(f"[{self._name}] 所有可用 API Key 都有错误记录，重置软错误计数")
             for key in non_disabled_keys:
                 self._key_errors[key] = 0
@@ -213,17 +211,29 @@ class BaseSearchProvider(ABC):
         """记录成功使用"""
         with self._state_lock:
             self._key_usage[key] = self._key_usage.get(key, 0) + 1
-            # 成功后减少错误计数
+            self._key_disabled_until[key] = 0.0
             if key in self._key_errors and self._key_errors[key] > 0:
                 self._key_errors[key] -= 1
-    
-    def _record_error(self, key: str) -> None:
+
+    def _key_cooldown_seconds(self, error_message: str) -> int:
+        """返回该错误对应的 key 冷却秒数；0 表示普通软错误。"""
+        return 0
+
+    def _record_error(self, key: str, error_message: str = "") -> None:
         """记录错误"""
+        cooldown_sec = max(0, int(self._key_cooldown_seconds(error_message or "")))
         with self._state_lock:
+            if cooldown_sec > 0:
+                self._key_errors[key] = max(self._key_errors.get(key, 0), 3)
+                self._key_disabled_until[key] = time.time() + cooldown_sec
+                logger.warning(
+                    f"[{self._name}] API Key {key[:8]}... 进入冷却 {cooldown_sec}s: {error_message}"
+                )
+                return
             self._key_errors[key] = self._key_errors.get(key, 0) + 1
             error_count = self._key_errors[key]
         logger.warning(f"[{self._name}] API Key {key[:8]}... 错误计数: {error_count}")
-    
+
     @abstractmethod
     def _do_search(self, query: str, api_key: str, max_results: int, days: int = 7) -> SearchResponse:
         """执行搜索（子类实现）"""
